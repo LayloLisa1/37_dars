@@ -1,0 +1,296 @@
+Uyga vazifa loyihasini bajarish uchun quyidagi bosqichlarni bajarishingiz kerak. Har bir bosqich uchun ko'rsatmalarga amal qilishingiz mumkin:
+
+### 1. Task: Loyihani boshlang'ich sozlash va fayllarni yaratish
+
+#### Vazifa:
+1. `qarz-daftari` nomli papka yarating.
+   ```bash
+   mkdir qarz-daftari
+   cd qarz-daftari
+   ```
+
+2. Node.js loyihasini boshlang:
+   ```bash
+   npm init -y
+   ```
+
+3. Express.js, pg, body-parser, va dotenv modullarini o'rnating:
+   ```bash
+   npm install express pg body-parser dotenv bcrypt
+   ```
+
+4. Yuqoridagi tuzilishga muvofiq papkalar va fayllarni yarating:
+   ```bash
+   mkdir -p middlewares models routes controllers db
+   touch db/db.js models/User.js models/Debt.js routes/auth.js routes/debts.js controllers/authController.js controllers/debtController.js app.js .env README.md
+   ```
+
+### 2. Task: Database ulanishini sozlash
+
+#### Vazifa:
+1. `db/db.js` faylini yaratib, PostgreSQL bilan ulanishni sozlang.
+2. `.env` faylini yaratib, unda database konfiguratsiya ma'lumotlarini saqlang.
+
+**`db/db.js` fayli:**
+```javascript
+const { Pool } = require('pg');
+require('dotenv').config();
+
+const pool = new Pool({
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME,
+  password: process.env.DB_PASSWORD,
+  port: process.env.DB_PORT,
+});
+
+module.exports = pool;
+```
+
+**`.env` fayli:**
+```
+DB_HOST=localhost
+DB_USER=your_db_user
+DB_PASSWORD=your_db_password
+DB_NAME=your_db_name
+DB_PORT=5432
+```
+
+### 3. Task: User modelini yaratish
+
+#### Vazifa:
+1. `models/User.js` faylini yarating.
+2. User modeli uchun kerakli maydonlarni aniqlang: `id`, `email`, `password`.
+
+**`models/User.js` fayli:**
+```javascript
+const pool = require('../db/db');
+
+const createUserTable = async () => {
+  const query = `
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      password VARCHAR(255) NOT NULL
+    )
+  `;
+  await pool.query(query);
+};
+
+module.exports = {
+  createUserTable,
+};
+```
+
+### 4. Task: Debt modelini yaratish
+
+#### Vazifa:
+1. `models/Debt.js` faylini yarating.
+2. Debt modeli uchun kerakli maydonlarni aniqlang: `id`, `user_id`, `amount`, `description`, `created_at`.
+
+**`models/Debt.js` fayli:**
+```javascript
+const pool = require('../db/db');
+
+const createDebtTable = async () => {
+  const query = `
+    CREATE TABLE IF NOT EXISTS debts (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id),
+      amount DECIMAL NOT NULL CHECK (amount >= 0),
+      description TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `;
+  await pool.query(query);
+};
+
+module.exports = {
+  createDebtTable,
+};
+```
+
+### 5. Task: Auth/Register marshrutini yaratish
+
+#### Vazifa:
+1. `routes/auth.js` faylini yarating.
+2. `authController.js` da `register` funksiyasini yozing.
+3. `app.js` faylida `auth` marshrutini ulang (`/auth/register`).
+
+**`routes/auth.js` fayli:**
+```javascript
+const express = require('express');
+const { register } = require('../controllers/authController');
+const router = express.Router();
+
+router.post('/register', register);
+
+module.exports = router;
+```
+
+**`controllers/authController.js` fayli:**
+```javascript
+const bcrypt = require('bcrypt');
+const pool = require('../db/db');
+const { createUserTable } = require('../models/User');
+
+const register = async (req, res) => {
+  await createUserTable();
+
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email and password are required' });
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const query = 'INSERT INTO users (email, password) VALUES ($1, $2) RETURNING *';
+  const values = [email, hashedPassword];
+
+  try {
+    const result = await pool.query(query, values);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ message: 'Error registering user', error });
+  }
+};
+
+module.exports = {
+  register,
+};
+```
+
+**`app.js` fayli:**
+```javascript
+const express = require('express');
+const bodyParser = require('body-parser');
+const authRoutes = require('./routes/auth');
+
+const app = express();
+app.use(bodyParser.json());
+
+app.use('/auth', authRoutes);
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+```
+
+### 6. Task: Auth/Login marshrutini yaratish
+
+#### Vazifa:
+1. `authController.js` da `login` funksiyasini yozing.
+2. `app.js` faylida `auth` marshrutini ulang (`/auth/login`).
+
+**`controllers/authController.js` fayliga qo'shimcha:**
+```javascript
+const login = async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email and password are required' });
+  }
+
+  const query = 'SELECT * FROM users WHERE email = $1';
+  const values = [email];
+
+  try {
+    const result = await pool.query(query, values);
+    if (result.rows.length === 0) {
+      return res.status(400).json({ message: 'User not found' });
+    }
+
+    const user = result.rows[0];
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+      return res.status(400).json({ message: 'Invalid password' });
+    }
+
+    res.status(200).json({ message: 'Login successful', user });
+  } catch (error) {
+    res.status(500).json({ message: 'Error logging in', error });
+  }
+};
+
+module.exports = {
+  register,
+  login,
+};
+```
+
+**`routes/auth.js` fayliga qo'shimcha:**
+```javascript
+const { login } = require('../controllers/authController');
+router.post('/login', login);
+```
+
+### 7. Task: Auth middleware yaratish
+
+#### Vazifa:
+1. `middlewares/authMiddleware.js` faylini yarating.
+2. Har safar amal bajarish uchun email va passwordni tekshirib turing.
+
+**`middlewares/authMiddleware.js` fayli:**
+```javascript
+const bcrypt = require('bcrypt');
+const pool = require('../db/db');
+
+const authMiddleware = async (req, res, next) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email and password are required' });
+  }
+
+  const query = 'SELECT * FROM users WHERE email = $1';
+  const values = [email];
+
+  try {
+    const result = await pool.query(query, values);
+    if (result.rows.length === 0) {
+      return res.status(400).json({ message: 'User not found' });
+    }
+
+    const user = result.rows[0];
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+      return res.status(400).json({ message: 'Invalid password' });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    res.status(500).json({ message: 'Authentication error', error });
+  }
+};
+
+module.exports = authMiddleware;
+```
+
+### 8. Task: CRUD marshrutlarini yaratish
+
+#### Vazifa:
+1. `routes/debts.js` faylini yarating.
+2. `debtController.js` da `createDebt`, `getDebts`, `updateDebt`, `deleteDebt` funksiyalarini yozing.
+3. `app.js` faylida `debts` marshrutini ulang (`/debts`).
+
+**`routes/debts.js` fayli:**
+```javascript
+const express = require('express');
+const { createDebt, getDebts, updateDebt, deleteDebt } = require('../controllers/debtController');
+const authMiddleware = require('../middlewares/authMiddleware');
+const router = express.Router();
+
+router.post('/', authMiddleware, createDebt);
+router.get('/', authMiddleware, getDebts);
+router.put('/:id', authMiddleware, updateDebt);
+router.delete('/:id', authMiddleware, deleteDebt);
+
+module.exports = router;
+```
+
+**`controllers/debtController.js` fayli:**
+```javascript
+const pool = require('../db/db');
+
+const createDebt = async (req, res) => {
+  const { user_id, amount, description } = req.body;
+  const query = 'INSERT INTO debts (user_id, amount, description) VALUES ($1, $2,
